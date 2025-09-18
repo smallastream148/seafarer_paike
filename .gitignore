@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE settings
+.vscode/
+.idea/
+
+# Output files
+# We assume excel files with "result" or "output" in the name are generated outputs
+# and should not be committed to the repository.
+*result.xlsx
+*output.xlsx

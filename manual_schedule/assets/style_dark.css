@@ -1,0 +1,16 @@
+/* Dark theme extracted */
+body.dark-mode, .dark-mode .stApp { background:#1d232a; color:#d6dde4; }
+.dark-mode .tt-header {background:linear-gradient(90deg,#2a323c,#222b33);border-color:#3a4652;color:#dbe3ea;}
+.dark-mode .grid-row-date, .dark-mode .grid-row-week {background:#2a323a;border-color:#3a4650;color:#d1d9e0;}
+.dark-mode .course-chip {background:#2f3942;border-color:#46525c;color:#e4ecf2;}
+.dark-mode .course-chip.done {filter:brightness(.85);}
+.dark-mode .course-chip:before {opacity:.9;}
+.dark-mode .legend-box {background:#273039;border-color:#394652;}
+.dark-mode .progress-box {background:#27313a;border-color:#394652;}
+.dark-mode .soft-card {background:#27313a;border-color:#3a4752;}
+.dark-mode .slot-unavailable {background:#303a43;color:#7f8b96;border-color:#4a5762;}
+.dark-mode .icon-btn {background:#2d3640;border-color:#46525c;color:#cfd8df;}
+.dark-mode .icon-btn:hover {background:#3a4652;color:#fff;border-color:#556370;}
+.dark-mode .mesh-cell:after {border-color:#3a4652;}
+.dark-mode .mesh-cell.editing:after {border-color:#5a6b78;background:rgba(60,70,80,.35);}    
+.dark-mode .grid-mesh-wrapper {border-color:#3a4652;}

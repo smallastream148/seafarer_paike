@@ -1,0 +1,302 @@
+import datetime
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional
+import pandas as pd
+import sys, pathlib, re
+
+# 现已优先使用 auto_schedule.data_model.TimetableData；若在 manual_schedule 目录直接运行需补 parent 路径。
+try:
+    from auto_schedule.data_model import TimetableData as _AutoTimetableData  # type: ignore
+except ImportError:  # 尝试将父目录加入 sys.path 再试
+    try:
+        parent = pathlib.Path(__file__).resolve().parents[1]
+        if str(parent) not in sys.path:
+            sys.path.insert(0, str(parent))
+        from auto_schedule.data_model import TimetableData as _AutoTimetableData  # type: ignore
+    except ImportError:
+        _AutoTimetableData = None  # 最终失败，后续走 legacy 路径
+
+@dataclass
+class CourseInfo:
+    name: str
+    blocks: int
+    teachers: List[str]
+    is_two: bool
+    prerequisites: List[str]
+    is_practical: bool
+    is_theory: bool = False
+
+@dataclass
+class ClassInfo:
+    class_id: str
+    courses: List[str]
+    start_date: datetime.date
+    end_date: datetime.date
+
+@dataclass
+class PlacedBlock:
+    class_id: str
+    course: str
+    teacher1: str
+    teacher2: Optional[str]
+    date: datetime.date
+    period: int  # 0 上午 1 下午
+
+class TimetableData:
+    """手动排课适配数据模型: 封装 auto_schedule 的 TimetableData.
+
+    提供属性:
+      courses: 名称 -> CourseInfo
+      classes: 班级ID -> ClassInfo
+      teacher_unavailable / class_unavailable: 与旧接口保持一致
+    """
+    def __init__(self, excel_file_path='排课数据.xlsx'):
+        if _AutoTimetableData is None:
+            # Legacy 回退：直接解析 Excel（与早期版本逻辑类似）
+            self._legacy_load(excel_file_path)
+            return
+        auto = _AutoTimetableData(excel_file_path)
+        self._auto = auto
+        self.courses: Dict[str, CourseInfo] = {}
+        for name, c in auto.COURSE_DATA.items():
+            is_two = bool(c.get('is_two_teacher', False))
+            # 派生: 双师=实操 非理论; 单师=理论 非实操
+            is_practical = is_two
+            is_theory = not is_two
+            self.courses[name] = CourseInfo(
+                name=name,
+                blocks=int(c['blocks']),
+                teachers=list(c['available_teachers']),
+                is_two=is_two,
+                prerequisites=list(c.get('prerequisites', [])),
+                is_practical=is_practical,
+                is_theory=is_theory,
+            )
+        self.classes: Dict[str, ClassInfo] = {}
+        for cid, info in auto.CLASSES.items():
+            self.classes[cid] = ClassInfo(
+                class_id=cid,
+                courses=list(info['courses']),
+                start_date=info['start_date'],
+                end_date=info['end_date'],
+            )
+        self.teacher_unavailable = auto.TEACHER_UNAVAILABLE_SLOTS
+        self.class_unavailable = auto.CLASS_UNAVAILABLE_SLOTS
+
+    def _legacy_load(self, excel_file_path: str):
+        self._auto = None
+        self.courses = {}
+        self.classes = {}
+        self.teacher_unavailable = {}
+        self.class_unavailable = {}
+        dfc = pd.read_excel(excel_file_path, sheet_name='课程数据')
+        has_prereq = 'prereq' in dfc.columns
+        for _, r in dfc.iterrows():
+            name = r['课程名称']
+            blocks = int(r['blocks'])
+            raw_teachers = str(r['available_teachers'])
+            teachers = [t.strip() for t in re.split(r'[，,、;；/\\ ]+', raw_teachers) if t and t.strip()]
+            raw_two = str(r.get('is_two_teacher','')).strip().lower()
+            is_two = raw_two in {'y','yes','true','双','2','two'}
+            prereqs = []
+            if has_prereq:
+                prereqs = [p.strip() for p in str(r.get('prereq','')).split(',') if p.strip()]
+            is_practical = is_two
+            is_theory = (not is_two)
+            self.courses[name] = CourseInfo(name, blocks, teachers, is_two, prereqs, is_practical, is_theory)
+        dfcl = pd.read_excel(excel_file_path, sheet_name='班级数据')
+        for _, r in dfcl.iterrows():
+            cid = str(r['班级ID'])
+            courses = [c.strip() for c in str(r['courses']).split(',') if c.strip()]
+            sd = pd.to_datetime(r['start_date']).date()
+            ed = pd.to_datetime(r['end_date']).date()
+            self.classes[cid] = ClassInfo(cid, courses, sd, ed)
+        # 教师不可用
+        try:
+            dft = pd.read_excel(excel_file_path, sheet_name='教师不可用时间')
+            time_map = {'上午':0,'下午':1}
+            for _, r in dft.iterrows():
+                t = str(r['教师姓名']).strip()
+                date = pd.to_datetime(r['日期']).date()
+                p = time_map.get(str(r['时间段']).strip())
+                if p is None:
+                    continue
+                self.teacher_unavailable.setdefault(t, set()).add((date, p))
+        except Exception:
+            pass
+        # 班级不可用
+        try:
+            dfu = pd.read_excel(excel_file_path, sheet_name='班级不可用时间')
+            time_map = {'上午':0,'下午':1}
+            for _, r in dfu.iterrows():
+                cid = str(r['班级ID']).strip()
+                date = pd.to_datetime(r['日期']).date()
+                p = time_map.get(str(r['时间段']).strip())
+                if p is None:
+                    continue
+                self.class_unavailable.setdefault(cid, set()).add((date, p))
+        except Exception:
+            pass
+
+    def iter_class_slots(self, class_id: str):
+        info = self.classes[class_id]
+        days = (info.end_date - info.start_date).days + 1
+        for d in range(days):
+            date = info.start_date + datetime.timedelta(days=d)
+            for p in (0, 1):
+                if class_id in self.class_unavailable and (date, p) in self.class_unavailable[class_id]:
+                    continue
+                yield date, p
+
+class ManualScheduler:
+    def __init__(self, data: TimetableData):
+        self.data = data
+        self.placed: List[PlacedBlock] = []
+        self.history: List[Tuple[str, PlacedBlock]] = []  # ('add'/'del', block)
+
+    # --- 硬性校验 ---
+    def check_hard_violation(self, block: PlacedBlock) -> List[str]:
+        errs = []
+        # 课程存在性
+        if block.course not in self.data.courses:
+            errs.append('未知课程')
+            return errs
+        # 班级存在性
+        if block.class_id not in self.data.classes:
+            errs.append('未知班级')
+            return errs
+        cinfo = self.data.courses[block.course]
+        # 教师合法
+        if block.teacher1 not in cinfo.teachers:
+            errs.append('教师1不在课程可选列表')
+        if cinfo.is_two:
+            if not block.teacher2:
+                errs.append('双师缺第二教师')
+            elif block.teacher2 == block.teacher1:
+                errs.append('双师教师重复')
+            elif block.teacher2 not in cinfo.teachers:
+                errs.append('教师2不在课程可选列表')
+        else:
+            if block.teacher2:
+                errs.append('单师课程不应有第二教师')
+        # 时间合法范围和不可用
+        cls = self.data.classes[block.class_id]
+        if not (cls.start_date <= block.date <= cls.end_date):
+            errs.append('日期超出班级范围')
+        if block.class_id in self.data.class_unavailable and (block.date, block.period) in self.data.class_unavailable[block.class_id]:
+            errs.append('班级该时段不可用')
+        if block.teacher1 in self.data.teacher_unavailable and (block.date, block.period) in self.data.teacher_unavailable[block.teacher1]:
+            errs.append('教师1该时段不可用')
+        if block.teacher2 and block.teacher2 in self.data.teacher_unavailable and (block.date, block.period) in self.data.teacher_unavailable[block.teacher2]:
+            errs.append('教师2该时段不可用')
+        # 冲突：同时间教师 / 班级
+        for b in self.placed:
+            if b.date == block.date and b.period == block.period:
+                if b.class_id == block.class_id:
+                    errs.append('班级时间冲突')
+                if b.teacher1 == block.teacher1 or (block.teacher2 and (b.teacher1 == block.teacher2)) or \
+                   (b.teacher2 and (b.teacher2 == block.teacher1 or (block.teacher2 and b.teacher2 == block.teacher2))):
+                    errs.append('教师时间冲突')
+        # 已排块数超限
+        existing = sum(1 for b in self.placed if b.class_id==block.class_id and b.course==block.course)
+        if existing >= cinfo.blocks:
+            errs.append('课程块数已达上限')
+        # 理论课教师一致性
+        if cinfo.is_theory:
+            prev = [b for b in self.placed if b.class_id==block.class_id and b.course==block.course]
+            if prev:
+                base_t = prev[0].teacher1
+                if block.teacher1 != base_t:
+                    errs.append('理论课教师需保持一致')
+        return errs
+
+    def add_block(self, block: PlacedBlock) -> Tuple[bool, List[str]]:
+        errs = self.check_hard_violation(block)
+        if errs:
+            return False, errs
+        self.placed.append(block)
+        self.history.append(('add', block))
+        return True, []
+
+    def remove_last(self) -> bool:
+        if not self.history:
+            return False
+        act, blk = self.history.pop()
+        if act == 'add':
+            # 从 placed 删除最后对应对象
+            for i in range(len(self.placed)-1, -1, -1):
+                if self.placed[i] is blk:
+                    self.placed.pop(i)
+                    break
+        elif act == 'del':
+            # 撤销删除 -> 重新加入
+            self.placed.append(blk)
+        return True
+
+    def delete_block(self, block_index: int) -> bool:
+        """按 index 删除 placed 中的块, 并记录以便撤销。"""
+        if 0 <= block_index < len(self.placed):
+            blk = self.placed.pop(block_index)
+            self.history.append(('del', blk))
+            return True
+        return False
+
+    def remaining_blocks(self, class_id: str, course: str) -> int:
+        cinfo = self.data.courses[course]
+        # 计数逻辑：
+        # 单师课程: 每个已放置块计 1。
+        # 双师课程: 仅在该块拥有两个不同教师时才计 1 (缺第二教师视为未完成临时块)。
+        used = 0
+        for b in self.placed:
+            if b.class_id == class_id and b.course == course:
+                if cinfo.is_two:
+                    if b.teacher1 and b.teacher2 and b.teacher1 != b.teacher2:
+                        used += 1
+                else:
+                    used += 1
+        return cinfo.blocks - used
+
+    def export_rows(self):
+        period_name = {0:'上午',1:'下午'}
+        rows = []
+        for b in self.placed:
+            rows.append({'班级ID': b.class_id,'课程': b.course,'教师1': b.teacher1,'教师2': b.teacher2 or '',
+                         '日期': b.date,'时段': period_name[b.period]})
+        return rows
+
+    def supplement_second_teacher(self, block_index: int, teacher2: str) -> Tuple[bool, str]:
+        """为指定 index 的双师块补第二教师。
+        规则:
+          - 该块对应课程必须标记 is_two
+          - 当前 teacher2 为空或无效
+          - teacher2 在课程可选教师列表中且 != teacher1
+          - 补齐后需再次通过基本时间冲突校验 (教师占用 & 不可用)；若冲突恢复原状返回 False
+        """
+        if not (0 <= block_index < len(self.placed)):
+            return False, '索引不存在'
+        blk = self.placed[block_index]
+        cinfo = self.data.courses.get(blk.course)
+        if not cinfo:
+            return False, '课程不存在'
+        if not cinfo.is_two:
+            return False, '该课程非双师'
+        if blk.teacher2 and blk.teacher2 != blk.teacher1:
+            return False, '该块已具备两个教师'
+        if teacher2 == blk.teacher1:
+            return False, '第二教师需不同'
+        if teacher2 not in cinfo.teachers:
+            return False, '教师不在可选列表'
+        # 冲突与不可用校验
+        if teacher2 in self.data.teacher_unavailable and (blk.date, blk.period) in self.data.teacher_unavailable[teacher2]:
+            return False, '教师该时段不可用'
+        for i, other in enumerate(self.placed):
+            if i == block_index:
+                continue
+            if other.date == blk.date and other.period == blk.period:
+                if other.teacher1 == teacher2 or (other.teacher2 and other.teacher2 == teacher2):
+                    return False, '教师该时段已被占用'
+        # 通过
+        old_teacher2 = blk.teacher2
+        blk.teacher2 = teacher2
+        self.history.append(('add', blk))  # 记录一条操作, 仍用 'add' 方便撤销 (撤销时移除最后变更)
+        return True, '补齐成功'
