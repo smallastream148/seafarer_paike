@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 📚 智能排课系统 (Smart Course Scheduling System)
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
@@ -190,3 +191,7 @@ A: 点击"🔄 清除缓存"按钮即可重置。
 ---
 
 **Made with ❤️ by Your Team**
+=======
+# seafarer_paike
+用于船员排课的智能系统
+>>>>>>> a4199c8ce3f722c52702f5e73c45b373151ec287
