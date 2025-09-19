@@ -75,7 +75,14 @@ class TimetableData:
                 continue
         if latest_file:
             excel_file_path = latest_file
-        
+        else:
+            # 若是相对路径则锚定到仓库根，避免云端 CWD 与本地不同
+            if not os.path.isabs(excel_file_path):
+                candidate = os.path.join(root_dir, excel_file_path)
+            else:
+                candidate = excel_file_path
+            excel_file_path = candidate if os.path.exists(candidate) else os.path.join(root_dir, '排课数据.xlsx')
+
         self._excel_file_path = excel_file_path  # Store the determined path internally
 
         if _AutoTimetableData is None:

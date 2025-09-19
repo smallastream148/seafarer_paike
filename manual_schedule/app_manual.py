@@ -119,6 +119,38 @@ with st.sidebar:
         except Exception as e:
             st.error(f"无法预览文件: {e}")
 
+    # 2.5 环境与数据诊断
+    with st.expander("🧪 环境与数据诊断", expanded=False):
+        try:
+            st.caption(f"cwd: {os.getcwd()}")
+            st.caption(f"ROOT_DIR: {ROOT_DIR}")
+            st.caption(f"上传目录: {upload_dir}")
+            st.caption(f"环境变量 SEAFARER_UPLOAD_DIR: {os.environ.get('SEAFARER_UPLOAD_DIR')}")
+            # 显示当前会话/数据层选用的文件
+            active = getattr(data, 'excel_file_path', None)
+            st.caption(f"data.excel_file_path: {active}")
+            # 罗列候选路径中的 xlsx
+            candidates = []
+            try:
+                if upload_dir.exists():
+                    candidates.extend([str(p) for p in upload_dir.glob('*.xlsx')])
+            except Exception:
+                pass
+            try:
+                mdir = Path('/mount/data/uploaded_data')
+                if mdir.exists():
+                    candidates.extend([str(p) for p in mdir.glob('*.xlsx')])
+            except Exception:
+                pass
+            st.caption("检测到的Excel:")
+            if candidates:
+                for p in sorted(set(candidates)):
+                    st.text(p)
+            else:
+                st.text("(未发现上传的 .xlsx 文件)")
+        except Exception as e:
+            st.error(f"诊断信息获取失败: {e}")
+
     # 3. 清除数据（按钮始终显示：无数据时禁用；清除后通过 session_state 给出提示）
     try:
         upload_dir.mkdir(parents=True, exist_ok=True)

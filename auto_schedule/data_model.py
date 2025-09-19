@@ -28,7 +28,16 @@ class TimetableData:
                             latest_file = f
             except Exception:
                 continue
-        self.excel_file_path = latest_file or excel_file_path
+        # 选择最终 Excel 路径：优先最新上传；否则将相对路径锚定到仓库根，避免云端 CWD 差异
+        if latest_file:
+            self.excel_file_path = latest_file
+        else:
+            # 若传入是相对路径，则基于项目根拼接；若没有则回退到根目录的同名文件
+            if not os.path.isabs(excel_file_path):
+                candidate = os.path.join(root_dir, excel_file_path)
+            else:
+                candidate = excel_file_path
+            self.excel_file_path = candidate if os.path.exists(candidate) else os.path.join(root_dir, '排课数据.xlsx')
         
         self.COURSE_DATA = self._load_course_data()
         self.CLASSES = self._load_classes_data()
