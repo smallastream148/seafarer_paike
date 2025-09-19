@@ -61,7 +61,9 @@ class TimetableData:
                 user_file = max(files, key=os.path.getmtime)
         if user_file:
             excel_file_path = user_file
-        self.excel_file_path = excel_file_path
+        
+        self._excel_file_path = excel_file_path  # Store the determined path internally
+
         if _AutoTimetableData is None:
             # Legacy 回退：直接解析 Excel（与早期版本逻辑类似）
             self._legacy_load(excel_file_path)
@@ -93,6 +95,11 @@ class TimetableData:
             )
         self.teacher_unavailable = auto.TEACHER_UNAVAILABLE_SLOTS
         self.class_unavailable = auto.CLASS_UNAVAILABLE_SLOTS
+
+    @property
+    def excel_file_path(self):
+        """Provides read-only access to the excel file path."""
+        return self._excel_file_path
 
     def _legacy_load(self, excel_file_path: str):
         self._auto = None
