@@ -311,15 +311,29 @@ def render_ga_section():
                     from auto_schedule.data_model import TimetableData as AutoData
                     from manual_schedule.manual_core import PlacedBlock as MBlock
 
-                    best, metrics = run_scheduler(
-                        pop_size=int(pop),
-                        ngen=int(gen),
-                        excel_out=auto_result_path,
-                        seed=int(seed),
-                        verbose=int(verbose),
-                        # 确保 GA 使用与界面相同的数据源（修复云端数据传输不一致）
-                        excel_path=getattr(data, 'excel_file_path', None)
-                    )
+                    try:
+                        best, metrics = run_scheduler(
+                            pop_size=int(pop),
+                            ngen=int(gen),
+                            excel_out=auto_result_path,
+                            seed=int(seed),
+                            verbose=int(verbose),
+                            # 确保 GA 使用与界面相同的数据源（修复云端数据传输不一致）
+                            excel_path=getattr(data, 'excel_file_path', None)
+                        )
+                    except TypeError as te:
+                        # 兼容旧版本 run_scheduler 不支持 excel_path 的情况
+                        if 'unexpected keyword argument' in str(te) and 'excel_path' in str(te):
+                            st.info('检测到当前环境的排程引擎不支持 excel_path 参数，已回退到默认数据源逻辑。')
+                            best, metrics = run_scheduler(
+                                pop_size=int(pop),
+                                ngen=int(gen),
+                                excel_out=auto_result_path,
+                                seed=int(seed),
+                                verbose=int(verbose)
+                            )
+                        else:
+                            raise
 
                     # 优先从导出的 Excel 回读，确保云端 rerun 后也能恢复状态
                     session.scheduler.placed.clear()
