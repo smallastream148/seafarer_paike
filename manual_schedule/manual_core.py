@@ -52,7 +52,41 @@ class TimetableData:
     """
     def __init__(self, excel_file_path='排课数据.xlsx'):
         import os, glob
-        # 优先从 SEAFARER_UPLOAD_DIR、/mount/data/uploaded_data、项目根 uploaded_data 查找最新上传文件
+        # 若传入了绝对路径且存在，直接使用（避免跨会话串改）
+        if excel_file_path and os.path.isabs(excel_file_path) and os.path.exists(excel_file_path):
+            self._excel_file_path = excel_file_path
+            auto = _AutoTimetableData(excel_file_path) if _AutoTimetableData else None
+            if auto is None:
+                self._legacy_load(excel_file_path)
+                return
+            self._auto = auto
+            # 下方构建 courses/classes 同原逻辑
+            self.courses: Dict[str, CourseInfo] = {}
+            for name, c in auto.COURSE_DATA.items():
+                is_two = bool(c.get('is_two_teacher', False))
+                is_practical = is_two
+                is_theory = not is_two
+                self.courses[name] = CourseInfo(
+                    name=name,
+                    blocks=int(c['blocks']),
+                    teachers=list(c['available_teachers']),
+                    is_two=is_two,
+                    prerequisites=list(c.get('prerequisites', [])),
+                    is_practical=is_practical,
+                    is_theory=is_theory,
+                )
+            self.classes: Dict[str, ClassInfo] = {}
+            for cid, info in auto.CLASSES.items():
+                self.classes[cid] = ClassInfo(
+                    class_id=cid,
+                    courses=list(info['courses']),
+                    start_date=info['start_date'],
+                    end_date=info['end_date'],
+                )
+            self.teacher_unavailable = auto.TEACHER_UNAVAILABLE_SLOTS
+            self.class_unavailable = auto.CLASS_UNAVAILABLE_SLOTS
+            return
+        # 否则：优先从 SEAFARER_UPLOAD_DIR、/mount/data/uploaded_data、项目根 uploaded_data 查找最新上传文件
         root_dir = os.path.dirname(os.path.dirname(__file__))
         search_dirs = []
         env_dir = os.environ.get('SEAFARER_UPLOAD_DIR')

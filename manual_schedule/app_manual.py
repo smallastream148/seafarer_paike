@@ -5,6 +5,8 @@ import os
 import shutil
 import pandas as pd
 import tempfile
+import uuid
+from filelock import FileLock
 
 # 兼容包/脚本两种运行方式
 try:
@@ -15,10 +17,24 @@ except ModuleNotFoundError:
 st.set_page_config(page_title="船员培训智能排课系统", layout="centered", page_icon="⚓️")
 
 # ============ 初始化 ============
-@st.cache_resource
+def _ensure_session_objects():
+    # 每个浏览器会话生成唯一 ID；避免并发冲突
+    if 'session_id' not in st.session_state:
+        st.session_state['session_id'] = uuid.uuid4().hex
+    if 'manual_session' not in st.session_state:
+        st.session_state['manual_session'] = ManualSession()
+
 def get_session():
-    """获取或创建会话状态对象"""
-    return ManualSession()
+    _ensure_session_objects()
+    return st.session_state['manual_session']
+
+def rebuild_session(excel_path: str | None = None):
+    # 允许基于新的 excel 路径重建数据层
+    _ensure_session_objects()
+    from manual_schedule.manual_core import TimetableData as _TT
+    new_data = _TT(excel_path) if excel_path else _TT()
+    st.session_state['manual_session'] = ManualSession(new_data)
+    return st.session_state['manual_session']
 
 session = get_session()
 data = session.data
@@ -58,6 +74,7 @@ with st.sidebar:
     st.header("⚙️ 数据管理")
     
     upload_dir = get_writable_upload_dir()
+    SESSION_ID = st.session_state.get('session_id')
 
     # 1. 上传数据
     uploaded_file = st.file_uploader(
@@ -69,21 +86,19 @@ with st.sidebar:
     if uploaded_file is not None:
         if not upload_dir.exists():
             upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 为了确保只使用最新的文件，先清空目录
-        for f in upload_dir.glob('*.xlsx'):
-            f.unlink()
-
-        file_path = upload_dir / uploaded_file.name
+        # 仅清理本会话历史文件，避免影响他人
+        for f in upload_dir.glob(f"{SESSION_ID}_*.xlsx"):
+            try: f.unlink()
+            except Exception: pass
+        # 为会话生成专属文件名
+        file_path = upload_dir / f"{SESSION_ID}_{uploaded_file.name}"
         with open(file_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        
+        # 用会话专属路径重建数据会话
+        rebuild_session(str(file_path))
         # 通过增加key的值来重置file_uploader，避免循环
         st.session_state["file_uploader_key"] += 1
         st.toast(f"✅ 文件 '{uploaded_file.name}' 已上传。正在刷新...", icon="🎉")
-        
-        # 清除缓存并重新运行以加载新数据
-        get_session.clear()
         st.rerun()
 
     # 2. 预览数据
@@ -94,11 +109,11 @@ with st.sidebar:
             if not active_file or not os.path.exists(active_file):
                 latest = None
                 if upload_dir.exists():
-                    files = sorted(upload_dir.glob('*.xlsx'), key=lambda p: p.stat().st_mtime, reverse=True)
+                    files = sorted(upload_dir.glob(f"{SESSION_ID}_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
                     latest = str(files[0]) if files else None
                 # 额外检查 /mount/data/uploaded_data（云端场景）
                 if not latest and Path('/mount/data/uploaded_data').exists():
-                    files = sorted(Path('/mount/data/uploaded_data').glob('*.xlsx'), key=lambda p: p.stat().st_mtime, reverse=True)
+                    files = sorted(Path('/mount/data/uploaded_data').glob(f"{SESSION_ID}_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
                     latest = str(files[0]) if files else None
                 active_file = latest or str(ROOT_DIR / '排课数据.xlsx')
         except Exception:
@@ -141,13 +156,13 @@ with st.sidebar:
             candidates = []
             try:
                 if upload_dir.exists():
-                    candidates.extend([str(p) for p in upload_dir.glob('*.xlsx')])
+                    candidates.extend([str(p) for p in upload_dir.glob(f"{SESSION_ID}_*.xlsx")])
             except Exception:
                 pass
             try:
                 mdir = Path('/mount/data/uploaded_data')
                 if mdir.exists():
-                    candidates.extend([str(p) for p in mdir.glob('*.xlsx')])
+                    candidates.extend([str(p) for p in mdir.glob(f"{SESSION_ID}_*.xlsx")])
             except Exception:
                 pass
             st.caption("检测到的Excel:")
@@ -192,7 +207,7 @@ with st.sidebar:
         upload_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
-    has_uploaded = any(upload_dir.glob('*.xlsx'))
+    has_uploaded = any(upload_dir.glob(f"{SESSION_ID}_*.xlsx"))
     # 显示上一次清除后的成功提示
     if st.session_state.get('just_cleared'):
         st.success("✅ 已清除所有上传数据，已恢复默认数据。")
@@ -200,11 +215,11 @@ with st.sidebar:
     if st.button("🗑️ 清除上传数据", help="删除所有上传的数据，恢复使用默认数据", disabled=not has_uploaded):
         try:
             # 仅删除上传的 xlsx 文件，保留目录，避免按钮消失
-            for item in upload_dir.glob('*.xlsx'):
+            for item in upload_dir.glob(f"{SESSION_ID}_*.xlsx"):
                 if item.is_file():
                     item.unlink()
             st.session_state['just_cleared'] = True
-            get_session.clear()
+            rebuild_session()  # 重建为默认数据
             st.rerun()
         except PermissionError as e:
             st.error(f"清除失败：文件可能被占用。请关闭相关程序后重试。\n错误: {e}")
@@ -288,8 +303,11 @@ def render_ga_section():
         if cols[4].button('🚀 开始运行', type='primary', use_container_width=True):
             with st.spinner('正在运行遗传算法...'):
                 try:
-                    # 导出路径改为可写上传目录，避免云端根目录不可写
-                    auto_result_path = str(get_writable_upload_dir() / '__ui_auto_result.xlsx')
+                    # 导出路径改为可写上传目录（会话隔离），避免云端根目录不可写
+                    out_dir = get_writable_upload_dir()
+                    SESSION_ID = st.session_state.get('session_id')
+                    auto_result_path = str(out_dir / f"{SESSION_ID}__ui_auto_result.xlsx")
+                    tmp_result_path = str(out_dir / f"{SESSION_ID}__ui_auto_result.tmp.xlsx")
                     # 兼容旧版引擎：在运行前将当前数据文件同步到项目根的默认文件名
                     try:
                         src_excel = getattr(data, 'excel_file_path', None)
@@ -326,7 +344,7 @@ def render_ga_section():
                         best, metrics = run_scheduler(
                             pop_size=int(pop),
                             ngen=int(gen),
-                            excel_out=auto_result_path,
+                            excel_out=tmp_result_path,
                             seed=int(seed),
                             verbose=int(verbose),
                             # 确保 GA 使用与界面相同的数据源（修复云端数据传输不一致）
@@ -339,12 +357,20 @@ def render_ga_section():
                             best, metrics = run_scheduler(
                                 pop_size=int(pop),
                                 ngen=int(gen),
-                                excel_out=auto_result_path,
+                                excel_out=tmp_result_path,
                                 seed=int(seed),
                                 verbose=int(verbose)
                             )
                         else:
                             raise
+                    # 原子替换，防止并发读取到半成品
+                    try:
+                        lock = FileLock(auto_result_path + '.lock')
+                        with lock:
+                            os.replace(tmp_result_path, auto_result_path)
+                    except Exception:
+                        # 如果替换失败，回退直接使用 tmp 路径
+                        auto_result_path = tmp_result_path
 
                     # 优先从导出的 Excel 回读，确保云端 rerun 后也能恢复状态
                     session.scheduler.placed.clear()
