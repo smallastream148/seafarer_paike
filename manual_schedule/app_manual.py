@@ -290,6 +290,17 @@ def render_ga_section():
                 try:
                     # 导出路径改为可写上传目录，避免云端根目录不可写
                     auto_result_path = str(get_writable_upload_dir() / '__ui_auto_result.xlsx')
+                    # 兼容旧版引擎：在运行前将当前数据文件同步到项目根的默认文件名
+                    try:
+                        src_excel = getattr(data, 'excel_file_path', None)
+                        if src_excel and os.path.exists(src_excel):
+                            default_excel = str(ROOT_DIR / '排课数据.xlsx')
+                            # 若源文件与目标不同路径，则拷贝覆盖
+                            if os.path.abspath(src_excel) != os.path.abspath(default_excel):
+                                shutil.copy2(src_excel, default_excel)
+                    except Exception:
+                        # 同步失败不阻断流程（新引擎会使用 excel_path）
+                        pass
                     # 运行前做一次数据体检（容量与双师教师数）
                     fatal_msgs = []
                     # 容量 vs 需求
