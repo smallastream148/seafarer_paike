@@ -119,23 +119,29 @@ with st.sidebar:
         except Exception as e:
             st.error(f"无法预览文件: {e}")
 
-    # 3. 清除数据
-    if upload_dir.exists() and any(upload_dir.iterdir()):
-        if st.button("🗑️ 清除上传数据", help="删除所有上传的数据，恢复使用默认数据"):
-            # 改进删除逻辑，先删除文件再删除目录
-            try:
-                for item in upload_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                shutil.rmtree(upload_dir)
-                st.success("✅ 已清除所有上传数据。")
-                st.info("🔄 正在恢复默认数据...")
-                get_session.clear()
-                st.rerun()
-            except PermissionError as e:
-                st.error(f"清除失败：文件可能被占用。请关闭相关程序后重试。\n错误: {e}")
-            except Exception as e:
-                st.error(f"清除时发生未知错误: {e}")
+    # 3. 清除数据（按钮始终显示：无数据时禁用；清除后通过 session_state 给出提示）
+    try:
+        upload_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    has_uploaded = any(upload_dir.glob('*.xlsx'))
+    # 显示上一次清除后的成功提示
+    if st.session_state.get('just_cleared'):
+        st.success("✅ 已清除所有上传数据，已恢复默认数据。")
+        del st.session_state['just_cleared']
+    if st.button("🗑️ 清除上传数据", help="删除所有上传的数据，恢复使用默认数据", disabled=not has_uploaded):
+        try:
+            # 仅删除上传的 xlsx 文件，保留目录，避免按钮消失
+            for item in upload_dir.glob('*.xlsx'):
+                if item.is_file():
+                    item.unlink()
+            st.session_state['just_cleared'] = True
+            get_session.clear()
+            st.rerun()
+        except PermissionError as e:
+            st.error(f"清除失败：文件可能被占用。请关闭相关程序后重试。\n错误: {e}")
+        except Exception as e:
+            st.error(f"清除时发生未知错误: {e}")
 
 # 初始化颜色映射
 if 'course_color_map' not in st.session_state:
@@ -179,16 +185,17 @@ def render_ga_section():
     """渲染自动排课部分"""
     with st.expander("🤖 自动排课 (遗传算法)", expanded=False):
         st.info("使用遗传算法自动生成完整排课方案，结果将覆盖当前已排课程")
-        
+
         cols = st.columns(5)
         pop = cols[0].number_input('种群大小', 10, 500, 60, 10)
         gen = cols[1].number_input('迭代代数', 50, 2000, 200, 50)
         seed = cols[2].number_input('随机种子', 0, 999999, 42, 1)
         verbose = cols[3].selectbox('日志级别', [0, 1, 2], index=1)
-        
+
         if cols[4].button('🚀 开始运行', type='primary', use_container_width=True):
             with st.spinner('正在运行遗传算法...'):
                 try:
+                    auto_result_path = str(ROOT_DIR / '__ui_auto_result.xlsx')
                     # 运行前做一次数据体检（容量与双师教师数）
                     fatal_msgs = []
                     # 容量 vs 需求
@@ -205,35 +212,40 @@ def render_ga_section():
                             fatal_msgs.append(f"课程 {cname} 标记双师但教师数量不足2")
                     if fatal_msgs:
                         raise RuntimeError('数据不可行：' + '；'.join(fatal_msgs))
+
                     from auto_schedule.ga_engine import run_scheduler, build_absolute
                     from auto_schedule.data_model import TimetableData as AutoData
                     from manual_schedule.manual_core import PlacedBlock as MBlock
-                    
+
                     best, metrics = run_scheduler(
-                        pop_size=int(pop), 
-                        ngen=int(gen), 
-                        excel_out='__ui_auto_result.xlsx',
-                        seed=int(seed), 
+                        pop_size=int(pop),
+                        ngen=int(gen),
+                        excel_out=auto_result_path,
+                        seed=int(seed),
                         verbose=int(verbose)
                     )
-                    
+
+                    # 优先从导出的 Excel 回读，确保云端 rerun 后也能恢复状态
                     session.scheduler.placed.clear()
-                    auto_data = AutoData(getattr(session.data, 'excel_file_path', '排课数据.xlsx'))
-                    abs_best = build_absolute(best, auto_data)
-                    
-                    imported = 0
-                    for cid, course, t1, t2, date, period_idx, _ in abs_best:
-                        if date is None:
-                            continue
-                        blk = MBlock(cid, course, t1 or '', t2, date, period_idx)
-                        session.scheduler.placed.append(blk)
-                        imported += 1
-                    
+                    try:
+                        imported = session.import_from_excel(auto_result_path)
+                    except Exception:
+                        # 回退到内存导入
+                        auto_data = AutoData(getattr(session.data, 'excel_file_path', '排课数据.xlsx'))
+                        abs_best = build_absolute(best, auto_data)
+                        imported = 0
+                        for cid, course, t1, t2, date, period_idx, _ in abs_best:
+                            if date is None:
+                                continue
+                            blk = MBlock(cid, course, t1 or '', t2, date, period_idx)
+                            session.scheduler.placed.append(blk)
+                            imported += 1
+
                     st.success(f"✅ 自动排课完成！导入 {imported} 个课程块")
                     st.metric("硬约束满足", "是" if metrics['hard_ok'] else "否")
                     st.metric("适应度得分", f"{metrics['total_fitness']:.2f}")
                     force_rerun()
-                    
+
                 except Exception as e:
                     st.error(f"❌ 自动排课失败: {e}")
 
