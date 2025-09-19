@@ -698,36 +698,41 @@ def main():
     
     # 班级选择
     st.markdown("---")
+    class_keys = list(data.classes.keys())
+    if not class_keys:
+        st.error("未检测到班级数据，请上传有效的排课数据 Excel 文件，或检查数据格式。")
+        return
     selected_class = st.selectbox(
         '🏫 选择班级',
-        list(data.classes.keys()),
-        key='global_class'
+        class_keys,
+        key='global_class',
+        index=0 if st.session_state.get('global_class') not in class_keys else class_keys.index(st.session_state['global_class'])
     )
-    
+
     # 自动排课
     render_ga_section()
-    
+
     # 图例
     render_legend()
-    
+
     # 计算进度
-    prog_rows, total_remain, finished, total_courses = compute_progress(selected_class)
-    
-    # 工具栏
-    render_toolbar(selected_class, finished, total_courses, total_remain)
-    
-    # 进度面板
-    render_progress_panel(prog_rows, total_remain)
-    
-    # 课表
-    render_timetable(selected_class)
-    
+    if selected_class is not None:
+        prog_rows, total_remain, finished, total_courses = compute_progress(selected_class)
+        # 工具栏
+        render_toolbar(selected_class, finished, total_courses, total_remain)
+        # 进度面板
+        render_progress_panel(prog_rows, total_remain)
+        # 课表
+        render_timetable(selected_class)
+    else:
+        st.warning("请选择班级后查看课表和进度。"); return
+
     # 软约束
     render_soft_constraints()
-    
+
     # 导出
     render_export()
-    
+
     # 页脚
     st.markdown("---")
     st.caption("💡 提示：点击课程块可删除，点击空白时段可添加课程")
