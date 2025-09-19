@@ -1,11 +1,24 @@
 import datetime
 import re
 import pandas as pd
+import os
+import glob
 from .config import CONFIG
 
 class TimetableData:
     def __init__(self, excel_file_path='排课数据.xlsx'):
-        self.excel_file_path = excel_file_path
+        # 优先查找 uploaded_data 目录下最新的 xlsx 文件
+        upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploaded_data')
+        user_file = None
+        if os.path.exists(upload_dir):
+            files = glob.glob(os.path.join(upload_dir, '*.xlsx'))
+            if files:
+                user_file = max(files, key=os.path.getmtime)
+        if user_file:
+            self.excel_file_path = user_file
+        else:
+            self.excel_file_path = excel_file_path
+        
         self.COURSE_DATA = self._load_course_data()
         self.CLASSES = self._load_classes_data()
         self.TEACHER_UNAVAILABLE_SLOTS = self._load_teacher_availability()

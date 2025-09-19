@@ -51,6 +51,17 @@ class TimetableData:
       teacher_unavailable / class_unavailable: 与旧接口保持一致
     """
     def __init__(self, excel_file_path='排课数据.xlsx'):
+        import os, glob
+        # 优先查找 uploaded_data 目录下最新的 xlsx 文件
+        upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploaded_data')
+        user_file = None
+        if os.path.exists(upload_dir):
+            files = glob.glob(os.path.join(upload_dir, '*.xlsx'))
+            if files:
+                user_file = max(files, key=os.path.getmtime)
+        if user_file:
+            excel_file_path = user_file
+        self.excel_file_path = excel_file_path
         if _AutoTimetableData is None:
             # Legacy 回退：直接解析 Excel（与早期版本逻辑类似）
             self._legacy_load(excel_file_path)

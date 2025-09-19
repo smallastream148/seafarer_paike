@@ -1,6 +1,9 @@
 import streamlit as st
 import datetime
 from pathlib import Path
+import os
+import shutil
+import pandas as pd
 
 # 兼容包/脚本两种运行方式
 try:
@@ -8,16 +11,88 @@ try:
 except ModuleNotFoundError:
     from manual_state import ManualSession
 
-st.set_page_config(page_title="船员培训智能排课系统", layout="wide", page_icon="⚓️")
+st.set_page_config(page_title="船员培训智能排课系统", layout="centered", page_icon="⚓️")
 
 # ============ 初始化 ============
 @st.cache_resource
 def get_session():
+    """获取或创建会话状态对象"""
     return ManualSession()
 
 session = get_session()
 data = session.data
 ASSET_DIR = Path(__file__).parent / 'assets'
+
+# ============ 侧边栏 (数据管理) ============
+# 使用 session_state 来防止文件上传后无限循环刷新
+if "file_uploader_key" not in st.session_state:
+    st.session_state["file_uploader_key"] = 0
+
+with st.sidebar:
+    st.header("⚙️ 数据管理")
+    
+    upload_dir = Path('uploaded_data')
+
+    # 1. 上传数据
+    uploaded_file = st.file_uploader(
+        "上传新的排课数据",
+        type=['xlsx'],
+        help="上传后将自动覆盖现有上传数据并刷新页面",
+        key=st.session_state["file_uploader_key"],
+    )
+    if uploaded_file is not None:
+        if not upload_dir.exists():
+            upload_dir.mkdir()
+        
+        # 为了确保只使用最新的文件，先清空目录
+        for f in upload_dir.glob('*.xlsx'):
+            f.unlink()
+
+        file_path = upload_dir / uploaded_file.name
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        # 通过增加key的值来重置file_uploader，避免循环
+        st.session_state["file_uploader_key"] += 1
+        st.toast(f"✅ 文件 '{uploaded_file.name}' 已上传。正在刷新...", icon="🎉")
+        
+        # 清除缓存并重新运行以加载新数据
+        get_session.clear()
+        st.rerun()
+
+    # 2. 预览数据
+    with st.expander("📄 预览当前数据", expanded=True):
+        active_file = data.excel_file_path
+        st.caption(f"当前使用文件: `{os.path.basename(active_file)}`")
+        
+        try:
+            # 使用 with 语句确保文件在读取后被关闭
+            with pd.ExcelFile(active_file) as xls:
+                sheet_names = xls.sheet_names
+                selected_sheet = st.selectbox("选择工作表预览", sheet_names, key="sheet_preview")
+                if selected_sheet:
+                    df = pd.read_excel(xls, sheet_name=selected_sheet)
+                    st.dataframe(df.head(5), height=200)
+        except Exception as e:
+            st.error(f"无法预览文件: {e}")
+
+    # 3. 清除数据
+    if upload_dir.exists() and any(upload_dir.iterdir()):
+        if st.button("🗑️ 清除上传数据", help="删除所有上传的数据，恢复使用默认数据"):
+            # 改进删除逻辑，先删除文件再删除目录
+            try:
+                for item in upload_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                shutil.rmtree(upload_dir)
+                st.success("✅ 已清除所有上传数据。")
+                st.info("🔄 正在恢复默认数据...")
+                get_session.clear()
+                st.rerun()
+            except PermissionError as e:
+                st.error(f"清除失败：文件可能被占用。请关闭相关程序后重试。\n错误: {e}")
+            except Exception as e:
+                st.error(f"清除时发生未知错误: {e}")
 
 # 初始化颜色映射
 if 'course_color_map' not in st.session_state:
@@ -48,7 +123,6 @@ def force_rerun():
     """强制 Streamlit 重新运行"""
     st.rerun()
 
-# ============ 渲染函数 ============
 def render_header():
     """渲染页面头部"""
     st.markdown("""
