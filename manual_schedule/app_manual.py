@@ -254,6 +254,31 @@ def render_ga_section():
     with st.expander("🤖 自动排课 (遗传算法)", expanded=False):
         st.info("使用遗传算法自动生成完整排课方案，结果将覆盖当前已排课程")
 
+        # 上次运行回显
+        last = st.session_state.get('ga_last')
+        if last:
+            col_a, col_b, col_c = st.columns([2,1,2])
+            with col_a:
+                st.success(f"上次导入: {last.get('imported', 0)} 块")
+            with col_b:
+                met = last.get('metrics', {}) or {}
+                st.metric("适应度", f"{met.get('total_fitness', 0):.2f}")
+            with col_c:
+                st.caption(f"结果文件: {last.get('path','-')}")
+            with st.expander('📄 查看导出文件(排课明细)摘要', expanded=False):
+                try:
+                    p = last.get('path')
+                    if p:
+                        with pd.ExcelFile(p) as _xls:
+                            if '排课明细' in _xls.sheet_names:
+                                _df = pd.read_excel(_xls, sheet_name='排课明细')
+                                st.caption(f"排课明细: {len(_df)} 行")
+                                st.dataframe(_df.head(10), height=220, use_container_width=True)
+                            else:
+                                st.warning('导出文件中未找到“排课明细”工作表')
+                except Exception as e:
+                    st.error(f"预览导出文件失败: {e}")
+
         cols = st.columns(5)
         pop = cols[0].number_input('种群大小', 10, 500, 60, 10)
         gen = cols[1].number_input('迭代代数', 50, 2000, 200, 50)
@@ -313,6 +338,12 @@ def render_ga_section():
                     st.success(f"✅ 自动排课完成！导入 {imported} 个课程块")
                     st.metric("硬约束满足", "是" if metrics['hard_ok'] else "否")
                     st.metric("适应度得分", f"{metrics['total_fitness']:.2f}")
+                    # 记录到 session_state 以便刷新后仍能看到摘要
+                    st.session_state['ga_last'] = {
+                        'imported': imported,
+                        'metrics': metrics,
+                        'path': auto_result_path,
+                    }
                     force_rerun()
 
                 except Exception as e:
