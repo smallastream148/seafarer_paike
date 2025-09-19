@@ -129,6 +129,14 @@ with st.sidebar:
             # 显示当前会话/数据层选用的文件
             active = getattr(data, 'excel_file_path', None)
             st.caption(f"data.excel_file_path: {active}")
+            # 版本信息
+            try:
+                import pandas as _pd
+                import openpyxl as _ox
+                st.caption(f"pandas: {_pd.__version__}")
+                st.caption(f"openpyxl: {_ox.__version__}")
+            except Exception:
+                pass
             # 罗列候选路径中的 xlsx
             candidates = []
             try:
@@ -148,6 +156,34 @@ with st.sidebar:
                     st.text(p)
             else:
                 st.text("(未发现上传的 .xlsx 文件)")
+            # 针对当前 active 文件，检查关键 sheet 的列与行数
+            if active and os.path.exists(active):
+                try:
+                    with pd.ExcelFile(active) as _xls:
+                        _sheets = set(_xls.sheet_names)
+                        st.caption(f"工作表: {sorted(_sheets)}")
+                    # 课程数据
+                    req_course = {'课程名称', 'blocks', 'available_teachers'}
+                    try:
+                        _dc = pd.read_excel(active, sheet_name='课程数据')
+                        st.caption(f"课程数据: {len(_dc)}行, 列={list(_dc.columns)}")
+                        miss = req_course - set(_dc.columns)
+                        if miss:
+                            st.error(f"课程数据缺少列: {sorted(miss)}")
+                    except Exception as e:
+                        st.error(f"读取'课程数据'失败: {e}")
+                    # 班级数据
+                    req_class = {'班级ID','courses','start_date','end_date'}
+                    try:
+                        _dl = pd.read_excel(active, sheet_name='班级数据')
+                        st.caption(f"班级数据: {len(_dl)}行, 列={list(_dl.columns)}")
+                        miss = req_class - set(_dl.columns)
+                        if miss:
+                            st.error(f"班级数据缺少列: {sorted(miss)}")
+                    except Exception as e:
+                        st.error(f"读取'班级数据'失败: {e}")
+                except Exception as e:
+                    st.error(f"诊断读取失败: {e}")
         except Exception as e:
             st.error(f"诊断信息获取失败: {e}")
 
@@ -794,6 +830,12 @@ def main():
     
     # 渲染头部
     render_header()
+    # 数据加载概览
+    try:
+        src_name = os.path.basename(getattr(data, 'excel_file_path', '未知'))
+        st.caption(f"数据源: {src_name} | 班级: {len(getattr(data, 'classes', {}))} | 课程: {len(getattr(data, 'courses', {}))}")
+    except Exception:
+        pass
     
     # 班级选择
     st.markdown("---")

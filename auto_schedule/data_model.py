@@ -67,8 +67,28 @@ class TimetableData:
 
     def _load_course_data(self):
         df = pd.read_excel(self.excel_file_path, sheet_name='课程数据')
+        # 列同义映射，增强兼容性
+        alias = {
+            '课程名称': ['课程', '课程名', 'course', '课程名称'],
+            'blocks': ['课时', '块数', 'blocks', '总块数'],
+            'available_teachers': ['可授教师', '教师', '教师名单', 'teachers', '可选教师'],
+            'is_two_teacher': ['双师', '是否双师', '双师课程', 'two_teachers'],
+            'prereq': ['先修', '先修课', '前置课程', 'prereq']
+        }
+        cols = set(df.columns)
+        ren = {}
+        for std, alts in alias.items():
+            if std in cols:
+                continue
+            for a in alts:
+                if a in cols:
+                    ren[a] = std
+                    break
+        if ren:
+            df = df.rename(columns=ren)
+            cols = set(df.columns)
         required = {'课程名称', 'blocks', 'available_teachers'}
-        missing = required - set(df.columns)
+        missing = required - cols
         if missing:
             raise ValueError(f"课程数据缺列:{missing}")
         has_prereq = 'prereq' in df.columns
@@ -88,7 +108,7 @@ class TimetableData:
             if blocks <= 0:
                 raise ValueError(f"课程 {name} blocks 必须>0")
             raw_teachers = str(row['available_teachers'])
-            teachers = [t.strip() for t in re.split(r'[，,、;；/\\ ]+', raw_teachers) if t and t.strip()]
+            teachers = [t.strip() for t in re.split(r'[，,、;；/\\\s]+', raw_teachers) if t and t.strip()]
             if not teachers:
                 raise ValueError(f"课程 {name} 缺少教师")
             prereqs = []
@@ -109,13 +129,33 @@ class TimetableData:
 
     def _load_classes_data(self):
         df = pd.read_excel(self.excel_file_path, sheet_name='班级数据')
+        alias = {
+            '班级ID': ['班级', '班级编号', 'class_id', '班级名称'],
+            'courses': ['课程列表', '课程', '课程安排', 'course_list'],
+            'start_date': ['开始日期', '开课日期', 'start', '开始'],
+            'end_date': ['结束日期', '结课日期', 'end', '结束']
+        }
+        cols = set(df.columns)
+        ren = {}
+        for std, alts in alias.items():
+            if std in cols:
+                continue
+            for a in alts:
+                if a in cols:
+                    ren[a] = std
+                    break
+        if ren:
+            df = df.rename(columns=ren)
+            cols = set(df.columns)
         required = {'班级ID','courses','start_date','end_date'}
-        missing = required - set(df.columns)
-        if missing: raise ValueError(f"班级数据缺列:{missing}")
+        missing = required - cols
+        if missing:
+            raise ValueError(f"班级数据缺列:{missing}")
         out = {}
         for _,row in df.iterrows():
             cid = str(row['班级ID'])
-            courses = [c.strip() for c in str(row['courses']).split(',') if c.strip()]
+            raw_courses = str(row['courses'])
+            courses = [c.strip() for c in re.split(r'[，,、;；/\\\s]+', raw_courses) if c.strip()]
             if not courses: raise ValueError(f"班级 {cid} 无课程")
             sd = pd.to_datetime(row['start_date']).date()
             ed = pd.to_datetime(row['end_date']).date()
@@ -128,11 +168,28 @@ class TimetableData:
             df = pd.read_excel(self.excel_file_path, sheet_name='教师不可用时间')
         except Exception:
             return {}
+        alias = {
+            '教师姓名': ['教师', '老师', 'teacher', '教师名'],
+            '日期': ['date', 'day'],
+            '时间段': ['时段', '节次', 'period']
+        }
+        cols = set(df.columns)
+        ren = {}
+        for std, alts in alias.items():
+            if std in cols:
+                continue
+            for a in alts:
+                if a in cols:
+                    ren[a] = std
+                    break
+        if ren:
+            df = df.rename(columns=ren)
+            cols = set(df.columns)
         need={'教师姓名','日期','时间段'}
-        if not need.issubset(df.columns):
+        if not need.issubset(cols):
             raise ValueError('教师不可用时间 缺列')
         out={}
-        mp={'上午':0,'下午':1}
+        mp={'上午':0,'下午':1,'AM':0,'PM':1,'0':0,'1':1,0:0,1:1}
         for _,r in df.iterrows():
             t=str(r['教师姓名']).strip(); date=pd.to_datetime(r['日期']).date(); p=mp.get(str(r['时间段']).strip())
             if p is None: continue
@@ -144,10 +201,27 @@ class TimetableData:
             df = pd.read_excel(self.excel_file_path, sheet_name='班级不可用时间')
         except Exception:
             return {}
+        alias = {
+            '班级ID': ['班级', '班级编号', 'class_id', '班级名称'],
+            '日期': ['date', 'day'],
+            '时间段': ['时段', '节次', 'period']
+        }
+        cols = set(df.columns)
+        ren = {}
+        for std, alts in alias.items():
+            if std in cols:
+                continue
+            for a in alts:
+                if a in cols:
+                    ren[a] = std
+                    break
+        if ren:
+            df = df.rename(columns=ren)
+            cols = set(df.columns)
         need={'班级ID','日期','时间段'}
-        if not need.issubset(df.columns): raise ValueError('班级不可用时间 缺列')
+        if not need.issubset(cols): raise ValueError('班级不可用时间 缺列')
         out={}
-        mp={'上午':0,'下午':1}
+        mp={'上午':0,'下午':1,'AM':0,'PM':1,'0':0,'1':1,0:0,1:1}
         for _,r in df.iterrows():
             cid=str(r['班级ID']).strip(); date=pd.to_datetime(r['日期']).date(); p=mp.get(str(r['时间段']).strip())
             if p is None: continue
