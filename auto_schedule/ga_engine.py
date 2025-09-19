@@ -317,7 +317,7 @@ def quick_self_check(individual, data: TimetableData):
     }
 
 
-def run_scheduler(pop_size=CONFIG['DEFAULT_POP'], ngen=CONFIG['DEFAULT_GEN'], excel_out=CONFIG['DEFAULT_OUTPUT'], seed=CONFIG['DEFAULT_SEED'], verbose=1):
+def run_scheduler(pop_size=CONFIG['DEFAULT_POP'], ngen=CONFIG['DEFAULT_GEN'], excel_out=CONFIG['DEFAULT_OUTPUT'], seed=CONFIG['DEFAULT_SEED'], verbose=1, excel_path: str | None = None):
     from .constraints import build_absolute
     from deap import creator
     def log(msg, level='INFO'):
@@ -326,7 +326,7 @@ def run_scheduler(pop_size=CONFIG['DEFAULT_POP'], ngen=CONFIG['DEFAULT_GEN'], ex
     if verbose:
         print(f"[INFO] 启动 GA: pop={pop_size} gen={ngen} seed={seed}")
     set_random_seed(seed)
-    data = TimetableData()
+    data = TimetableData(excel_path or '排课数据.xlsx')
     if verbose:
         print('[INFO] 数据加载完成')
     try:

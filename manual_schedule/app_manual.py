@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import shutil
 import pandas as pd
+import tempfile
 
 # 兼容包/脚本两种运行方式
 try:
@@ -24,6 +25,30 @@ data = session.data
 ASSET_DIR = Path(__file__).parent / 'assets'
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
+def get_writable_upload_dir() -> Path:
+    """选择一个可写的上传目录，兼容本地与云端。
+    优先顺序：环境变量 SEAFARER_UPLOAD_DIR -> /mount/data/uploaded_data -> 项目根 uploaded_data -> 临时目录
+    """
+    candidates = []
+    env_dir = os.environ.get('SEAFARER_UPLOAD_DIR')
+    if env_dir:
+        candidates.append(Path(env_dir))
+    # Streamlit Cloud 持久化目录
+    candidates.append(Path('/mount/data/uploaded_data'))
+    # 项目根目录（本地）
+    candidates.append(ROOT_DIR / 'uploaded_data')
+    # 系统临时目录
+    candidates.append(Path(tempfile.gettempdir()) / 'uploaded_data')
+    for p in candidates:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            if os.access(str(p), os.W_OK):
+                return p
+        except Exception:
+            continue
+    # 兜底
+    return ROOT_DIR / 'uploaded_data'
+
 # ============ 侧边栏 (数据管理) ============
 # 使用 session_state 来防止文件上传后无限循环刷新
 if "file_uploader_key" not in st.session_state:
@@ -32,7 +57,7 @@ if "file_uploader_key" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ 数据管理")
     
-    upload_dir = ROOT_DIR / 'uploaded_data'
+    upload_dir = get_writable_upload_dir()
 
     # 1. 上传数据
     uploaded_file = st.file_uploader(
@@ -67,10 +92,13 @@ with st.sidebar:
         try:
             active_file = getattr(data, 'excel_file_path', None)
             if not active_file or not os.path.exists(active_file):
-                upload_dir_abs = ROOT_DIR / 'uploaded_data'
                 latest = None
-                if upload_dir_abs.exists():
-                    files = sorted(upload_dir_abs.glob('*.xlsx'), key=lambda p: p.stat().st_mtime, reverse=True)
+                if upload_dir.exists():
+                    files = sorted(upload_dir.glob('*.xlsx'), key=lambda p: p.stat().st_mtime, reverse=True)
+                    latest = str(files[0]) if files else None
+                # 额外检查 /mount/data/uploaded_data（云端场景）
+                if not latest and Path('/mount/data/uploaded_data').exists():
+                    files = sorted(Path('/mount/data/uploaded_data').glob('*.xlsx'), key=lambda p: p.stat().st_mtime, reverse=True)
                     latest = str(files[0]) if files else None
                 active_file = latest or str(ROOT_DIR / '排课数据.xlsx')
         except Exception:
@@ -161,6 +189,22 @@ def render_ga_section():
         if cols[4].button('🚀 开始运行', type='primary', use_container_width=True):
             with st.spinner('正在运行遗传算法...'):
                 try:
+                    # 运行前做一次数据体检（容量与双师教师数）
+                    fatal_msgs = []
+                    # 容量 vs 需求
+                    class_unavail = getattr(data, 'class_unavailable', {}) or {}
+                    for cid, info in data.classes.items():
+                        days = (info.end_date - info.start_date).days + 1
+                        capacity = days * 2 - len(class_unavail.get(cid, set()))
+                        demand = sum(data.courses[c].blocks for c in info.courses if c in data.courses)
+                        if demand > capacity:
+                            fatal_msgs.append(f"班级 {cid} 需求 {demand} > 容量 {capacity}")
+                    # 双师课程教师数量
+                    for cname, cinfo in data.courses.items():
+                        if getattr(cinfo, 'is_two', False) and len(set(cinfo.teachers)) < 2:
+                            fatal_msgs.append(f"课程 {cname} 标记双师但教师数量不足2")
+                    if fatal_msgs:
+                        raise RuntimeError('数据不可行：' + '；'.join(fatal_msgs))
                     from auto_schedule.ga_engine import run_scheduler, build_absolute
                     from auto_schedule.data_model import TimetableData as AutoData
                     from manual_schedule.manual_core import PlacedBlock as MBlock
@@ -170,11 +214,12 @@ def render_ga_section():
                         ngen=int(gen), 
                         excel_out='__ui_auto_result.xlsx',
                         seed=int(seed), 
-                        verbose=int(verbose)
+                        verbose=int(verbose),
+                        excel_path=getattr(session.data, 'excel_file_path', None)
                     )
                     
                     session.scheduler.placed.clear()
-                    auto_data = AutoData()
+                    auto_data = AutoData(getattr(session.data, 'excel_file_path', '排课数据.xlsx'))
                     abs_best = build_absolute(best, auto_data)
                     
                     imported = 0
@@ -444,6 +489,17 @@ def render_time_slot_improved(class_id, date, period, class_df):
                 force_rerun()
         else:
             render_add_form(class_id, date, period, container_key)
+    else:
+        # 无法添加时给出原因提示，便于排查
+        reasons = []
+        if slot_unavail:
+            reasons.append('该时段不可用')
+        if has_blocks:
+            reasons.append('该时段已有课程')
+        if not remaining_any:
+            reasons.append('该班级所有课程块已排完')
+        if reasons:
+            st.caption('；'.join(reasons))
 
 def render_course_chip_improved(row, class_id, date, period):
     """改进的课程卡片渲染"""

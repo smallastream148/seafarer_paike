@@ -52,15 +52,29 @@ class TimetableData:
     """
     def __init__(self, excel_file_path='排课数据.xlsx'):
         import os, glob
-        # 优先查找 uploaded_data 目录下最新的 xlsx 文件
-        upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploaded_data')
-        user_file = None
-        if os.path.exists(upload_dir):
-            files = glob.glob(os.path.join(upload_dir, '*.xlsx'))
-            if files:
-                user_file = max(files, key=os.path.getmtime)
-        if user_file:
-            excel_file_path = user_file
+        # 优先从 SEAFARER_UPLOAD_DIR、/mount/data/uploaded_data、项目根 uploaded_data 查找最新上传文件
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        search_dirs = []
+        env_dir = os.environ.get('SEAFARER_UPLOAD_DIR')
+        if env_dir:
+            search_dirs.append(env_dir)
+        search_dirs.append('/mount/data/uploaded_data')
+        search_dirs.append(os.path.join(root_dir, 'uploaded_data'))
+        latest_file = None
+        latest_mtime = -1
+        for d in search_dirs:
+            try:
+                if d and os.path.exists(d):
+                    files = glob.glob(os.path.join(d, '*.xlsx'))
+                    for f in files:
+                        m = os.path.getmtime(f)
+                        if m > latest_mtime:
+                            latest_mtime = m
+                            latest_file = f
+            except Exception:
+                continue
+        if latest_file:
+            excel_file_path = latest_file
         
         self._excel_file_path = excel_file_path  # Store the determined path internally
 
