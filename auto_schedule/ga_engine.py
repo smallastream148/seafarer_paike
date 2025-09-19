@@ -451,6 +451,14 @@ def run_scheduler(pop_size=CONFIG['DEFAULT_POP'], ngen=CONFIG['DEFAULT_GEN'], ex
                 '完成率%': round(scheduled / required * 100, 2) if required else 0.0
             })
     course_df = pd.DataFrame(course_rows)
+    # 确保输出目录存在（云端可能需要提前创建）
+    try:
+        import os
+        out_dir = os.path.dirname(excel_out)
+        if out_dir and not os.path.exists(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        pass
     with pd.ExcelWriter(excel_out) as writer:
         df.to_excel(writer, sheet_name='排课明细', index=False)
         teacher_df.to_excel(writer, sheet_name='教师课时', index=False)

@@ -263,7 +263,8 @@ def render_ga_section():
         if cols[4].button('🚀 开始运行', type='primary', use_container_width=True):
             with st.spinner('正在运行遗传算法...'):
                 try:
-                    auto_result_path = str(ROOT_DIR / '__ui_auto_result.xlsx')
+                    # 导出路径改为可写上传目录，避免云端根目录不可写
+                    auto_result_path = str(get_writable_upload_dir() / '__ui_auto_result.xlsx')
                     # 运行前做一次数据体检（容量与双师教师数）
                     fatal_msgs = []
                     # 容量 vs 需求
