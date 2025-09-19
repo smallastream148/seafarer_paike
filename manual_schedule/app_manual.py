@@ -214,8 +214,7 @@ def render_ga_section():
                         ngen=int(gen), 
                         excel_out='__ui_auto_result.xlsx',
                         seed=int(seed), 
-                        verbose=int(verbose),
-                        excel_path=getattr(session.data, 'excel_file_path', None)
+                        verbose=int(verbose)
                     )
                     
                     session.scheduler.placed.clear()
