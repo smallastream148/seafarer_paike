@@ -870,8 +870,16 @@ def render_export():
         export_mode = st.selectbox('导出方式', ['浏览器下载', '服务器保存'])
     with col3:
         if st.button('🔄 清除缓存'):
-            get_session.clear()
-            st.success('缓存已清除')
+            # 仅清理界面相关的临时键，保留 session_id 与已加载的数据
+            keys_to_clear = [
+                'hide_done','unfinished_only','dark_mode','show_progress',
+                'editing_cell','ga_last','file_uploader_key'
+            ]
+            for k in keys_to_clear:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.toast('缓存已清除，即将刷新', icon='♻️')
+            st.rerun()
     
     # 文件名
     default_name = f"schedule_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -902,8 +910,23 @@ def render_export():
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                 )
             else:
-                path = session.export_excel(export_name, class_id=target_class)
-                st.success(f"✅ 已保存到: {path}")
+                # 服务器保存：写入会话隔离目录并原子替换
+                out_dir = get_writable_upload_dir()
+                SESSION_ID = st.session_state.get('session_id')
+                final_path = out_dir / f"{SESSION_ID}__{export_name}"
+                tmp_path = out_dir / f"{SESSION_ID}__{export_name}.tmp"
+                # 先写临时文件
+                session.export_excel(str(tmp_path), class_id=target_class)
+                # 原子替换并加锁，避免并发读半成品
+                try:
+                    from filelock import FileLock
+                    lock = FileLock(str(final_path) + '.lock')
+                    with lock:
+                        os.replace(str(tmp_path), str(final_path))
+                except Exception:
+                    # 若替换失败，仍然回退为临时文件路径
+                    final_path = tmp_path
+                st.success(f"✅ 已保存到: {final_path}")
                 
         except Exception as e:
             st.error(f"❌ 导出失败: {e}")
