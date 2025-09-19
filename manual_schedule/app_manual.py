@@ -22,6 +22,7 @@ def get_session():
 session = get_session()
 data = session.data
 ASSET_DIR = Path(__file__).parent / 'assets'
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 # ============ 侧边栏 (数据管理) ============
 # 使用 session_state 来防止文件上传后无限循环刷新
@@ -31,7 +32,7 @@ if "file_uploader_key" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ 数据管理")
     
-    upload_dir = Path('uploaded_data')
+    upload_dir = ROOT_DIR / 'uploaded_data'
 
     # 1. 上传数据
     uploaded_file = st.file_uploader(
@@ -42,7 +43,7 @@ with st.sidebar:
     )
     if uploaded_file is not None:
         if not upload_dir.exists():
-            upload_dir.mkdir()
+            upload_dir.mkdir(parents=True, exist_ok=True)
         
         # 为了确保只使用最新的文件，先清空目录
         for f in upload_dir.glob('*.xlsx'):
@@ -62,7 +63,19 @@ with st.sidebar:
 
     # 2. 预览数据
     with st.expander("📄 预览当前数据", expanded=True):
-        active_file = data.excel_file_path
+        # 更健壮的文件选择：优先 data.excel_file_path，其次 uploaded_data 最新文件，最后根目录默认文件
+        try:
+            active_file = getattr(data, 'excel_file_path', None)
+            if not active_file or not os.path.exists(active_file):
+                upload_dir_abs = ROOT_DIR / 'uploaded_data'
+                latest = None
+                if upload_dir_abs.exists():
+                    files = sorted(upload_dir_abs.glob('*.xlsx'), key=lambda p: p.stat().st_mtime, reverse=True)
+                    latest = str(files[0]) if files else None
+                active_file = latest or str(ROOT_DIR / '排课数据.xlsx')
+        except Exception:
+            active_file = str(ROOT_DIR / '排课数据.xlsx')
+
         st.caption(f"当前使用文件: `{os.path.basename(active_file)}`")
         
         try:
@@ -73,6 +86,8 @@ with st.sidebar:
                 if selected_sheet:
                     df = pd.read_excel(xls, sheet_name=selected_sheet)
                     st.dataframe(df.head(5), height=200)
+        except FileNotFoundError:
+            st.error("未找到数据文件，请在左侧上传 Excel 或将 `排课数据.xlsx` 放到仓库根目录。")
         except Exception as e:
             st.error(f"无法预览文件: {e}")
 
