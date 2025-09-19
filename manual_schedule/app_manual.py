@@ -316,7 +316,9 @@ def render_ga_section():
                         ngen=int(gen),
                         excel_out=auto_result_path,
                         seed=int(seed),
-                        verbose=int(verbose)
+                        verbose=int(verbose),
+                        # 确保 GA 使用与界面相同的数据源（修复云端数据传输不一致）
+                        excel_path=getattr(data, 'excel_file_path', None)
                     )
 
                     # 优先从导出的 Excel 回读，确保云端 rerun 后也能恢复状态
