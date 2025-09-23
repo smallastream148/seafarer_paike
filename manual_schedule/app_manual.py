@@ -472,8 +472,108 @@ def render_progress_panel(prog_rows, total_remain):
                 est_days = (total_remain + 1) // 2
                 st.info(f"📅 预计还需 {est_days} 天完成（按每天2块计算）")
 
+def render_global_add_panel(current_class_id: str):
+    """课表上方：手动添加课程块（允许强制添加）"""
+    with st.expander('➕ 手动添加课程块（可强制）', expanded=False):
+        # 选择班级
+        class_id = st.selectbox('班级', list(data.classes.keys()), index=list(data.classes.keys()).index(current_class_id), key='ga_cls_sel')
+        cls_info = data.classes[class_id]
+
+        # 日期与时段
+        sel_date = st.date_input('日期', value=cls_info.start_date, min_value=cls_info.start_date, max_value=cls_info.end_date, key=f'ga_date_{class_id}')
+        period_label = st.selectbox('时段', ['上午','下午'], index=0, key=f'ga_period_{class_id}')
+        period_idx = 0 if period_label == '上午' else 1
+
+        # 课程选项（可选择显示已完成）
+        remain_map = {c: session.scheduler.remaining_blocks(class_id, c) for c in cls_info.courses}
+        show_done = st.checkbox('显示已完成课程', value=False, key=f'ga_show_done_{class_id}')
+        course_opts = cls_info.courses if show_done else [c for c in cls_info.courses if remain_map[c] > 0]
+        if not course_opts:
+            st.info('没有可添加的课程（可勾选“显示已完成课程”以强制添加）')
+            course_opts = cls_info.courses
+        course = st.selectbox('课程', course_opts, format_func=lambda x: f"{x} (剩{remain_map.get(x,0)}块)", key=f'ga_course_{class_id}')
+
+        t1 = None
+        t2 = None
+        if course:
+            cinfo = data.courses[course]
+            # 计算占用与不可用
+            occupied = {b.teacher1 for b in session.scheduler.placed if b.date == sel_date and b.period == period_idx}
+            occupied.update({b.teacher2 for b in session.scheduler.placed if b.date == sel_date and b.period == period_idx and b.teacher2})
+            teacher_unavail = data.teacher_unavailable
+
+            def is_available(t: str) -> bool:
+                if t in occupied:
+                    return False
+                if t in teacher_unavail and (sel_date, period_idx) in teacher_unavail[t]:
+                    return False
+                return True
+
+            only_avail = st.checkbox('仅显示可用教师', value=True, key=f'ga_only_avail_{class_id}')
+            base_teachers = list(cinfo.teachers)
+            t1_candidates = [t for t in base_teachers if is_available(t)] if only_avail else base_teachers
+            if not t1_candidates:
+                t1_candidates = base_teachers  # 兜底：无可用教师时允许选择任何教师
+
+            # 理论课：只需一位教师
+            t1 = st.selectbox('教师1', t1_candidates, key=f'ga_t1_{class_id}')
+            if getattr(cinfo, 'is_two', False):
+                t2_base = [t for t in base_teachers if t != t1]
+                t2_candidates = [t for t in t2_base if is_available(t)] if only_avail else t2_base
+                if not t2_candidates:
+                    t2_candidates = t2_base
+                t2 = st.selectbox('教师2', t2_candidates, key=f'ga_t2_{class_id}')
+            else:
+                t2 = None
+
+        # 保存：硬约束冲突则不添加；软约束提示但允许添加
+        if st.button('✅ 保存', key=f'ga_save_{class_id}'):
+            if not course or not t1:
+                st.warning('请先选择课程与教师')
+            else:
+                try:
+                    from manual_schedule.manual_core import PlacedBlock as _PB
+                except Exception:
+                    from manual_core import PlacedBlock as _PB  # type: ignore
+                new_blk = _PB(class_id, course, t1, t2, sel_date, period_idx)
+                # 1) 硬约束检测：有则不添加
+                try:
+                    hard_errs = session.scheduler.check_hard_violation(new_blk)
+                except Exception:
+                    hard_errs = []
+                if hard_errs:
+                    st.error('存在硬约束冲突：' + '；'.join(hard_errs))
+                else:
+                    # 2) 软约束评估（前后对比，仅提示，不阻止）
+                    try:
+                        try:
+                            from manual_schedule.manual_soft import evaluate_soft as _eval_soft
+                        except Exception:
+                            from manual_soft import evaluate_soft as _eval_soft  # type: ignore
+                        before_adj, _ = _eval_soft(session.scheduler.placed, data)
+                        after_adj, _ = _eval_soft(session.scheduler.placed + [new_blk], data)
+                        delta = after_adj - before_adj
+                        if delta > 0:
+                            st.warning(f'软约束变化：+{delta}（越大越差）')
+                        elif delta < 0:
+                            st.info(f'软约束变化：{delta}（负值代表改善）')
+                        else:
+                            st.info('软约束变化：0')
+                    except Exception:
+                        pass
+                    # 3) 真正添加（通过 add_block，保障一致的硬校验）
+                    ok, errs = session.add_block(class_id, course, t1, t2, sel_date, period_idx)
+                    if not ok and errs:
+                        st.error('添加失败：' + '；'.join(errs))
+                    else:
+                        st.success('添加成功')
+                        force_rerun()
+
 def render_timetable(class_id):
     """渲染课表"""
+    # 课表上方：手动添加课程块（可强制添加）
+    render_global_add_panel(class_id)
+
     st.markdown("### 📅 课表视图")
     
     # 添加表格容器样式
@@ -617,28 +717,12 @@ def render_time_slot_improved(class_id, date, period, class_df):
         st.session_state['editing_cell'] = None
         editing = False
     
-    # 判断是否可以添加
+    # 可添加判断：仅在已有课程时禁止，其余均允许尝试添加（保存后再做硬约束校验）
     remaining_any = any(
         session.scheduler.remaining_blocks(class_id, c) > 0 
         for c in data.classes[class_id].courses
     )
-    can_add = (not slot_unavail) and remaining_any and (not has_blocks)
-    
-    # 不可用时段
-    if slot_unavail and slot_df.empty:
-        st.markdown("""
-            <div style='
-                background: linear-gradient(45deg, #f8f9fa 25%, transparent 25%, transparent 75%, #f8f9fa 75%, #f8f9fa),
-                linear-gradient(45deg, #f8f9fa 25%, transparent 25%, transparent 75%, #f8f9fa 75%, #f8f9fa);
-                background-size: 10px 10px;
-                background-position: 0 0, 5px 5px;
-                color: #adb5bd;
-                text-align: center;
-                padding: 15px;
-                border-radius: 4px;
-            '>🚫 不可排课</div>
-        """, unsafe_allow_html=True)
-        return
+    can_add = not has_blocks
     
     # 显示已有课程
     if has_blocks:
@@ -648,22 +732,22 @@ def render_time_slot_improved(class_id, date, period, class_df):
     # 添加课程按钮或表单
     elif can_add:
         if not editing:
+            # 提示潜在风险，但不阻止用户发起添加
+            warnings = []
+            if slot_unavail:
+                warnings.append('该时段为班级不可用')
+            if not remaining_any:
+                warnings.append('该班级课程已全部排完')
+            if warnings:
+                st.caption('⚠️ ' + '；'.join(warnings) + '（保存后将进行硬约束检查）')
             if st.button('➕ 添加课程', key=f"add_{container_key}", use_container_width=True):
                 st.session_state['editing_cell'] = container_key
                 force_rerun()
         else:
             render_add_form(class_id, date, period, container_key)
     else:
-        # 无法添加时给出原因提示，便于排查
-        reasons = []
-        if slot_unavail:
-            reasons.append('该时段不可用')
-        if has_blocks:
-            reasons.append('该时段已有课程')
-        if not remaining_any:
-            reasons.append('该班级所有课程块已排完')
-        if reasons:
-            st.caption('；'.join(reasons))
+        # 仅在已有课程时禁止
+        st.caption('该时段已有课程')
 
 def render_course_chip_improved(row, class_id, date, period):
     """改进的课程卡片渲染"""
@@ -814,12 +898,45 @@ def render_add_form(class_id, date, period, container_key):
         col1, col2 = st.columns(2)
         with col1:
             if st.button('✅ 保存', key=f"save_{container_key}", type='primary'):
-                ok, errs = session.add_block(class_id, course, t1, t2, date, period)
-                if ok:
-                    st.session_state['editing_cell'] = None
-                    force_rerun()
+                # 构造块：硬约束冲突则不允许添加；软约束仅提示
+                try:
+                    from manual_schedule.manual_core import PlacedBlock as _PB
+                except Exception:
+                    from manual_core import PlacedBlock as _PB  # type: ignore
+                new_blk = _PB(class_id, course, t1, t2, date, period)
+                # 1) 硬约束检查
+                try:
+                    hard_errs = session.scheduler.check_hard_violation(new_blk)
+                except Exception:
+                    hard_errs = []
+                if hard_errs:
+                    st.error('存在硬约束冲突：' + '；'.join(hard_errs))
                 else:
-                    st.error('；'.join(errs))
+                    # 2) 软约束评估变化
+                    try:
+                        try:
+                            from manual_schedule.manual_soft import evaluate_soft as _eval_soft
+                        except Exception:
+                            from manual_soft import evaluate_soft as _eval_soft  # type: ignore
+                        before_adj, _ = _eval_soft(session.scheduler.placed, data)
+                        after_adj, _ = _eval_soft(session.scheduler.placed + [new_blk], data)
+                        delta = after_adj - before_adj
+                        if delta > 0:
+                            st.warning(f'软约束变化：+{delta}（越大越差）')
+                        elif delta < 0:
+                            st.info(f'软约束变化：{delta}（负值代表改善）')
+                        else:
+                            st.info('软约束变化：0')
+                    except Exception:
+                        pass
+                    # 3) 真正添加（通过 add_block，保障一致的硬校验与历史记录）
+                    ok, errs = session.add_block(class_id, course, t1, t2, date, period)
+                    if not ok and errs:
+                        st.error('添加失败：' + '；'.join(errs))
+                    else:
+                        st.success('添加成功')
+                        st.session_state['editing_cell'] = None
+                        force_rerun()
         
         with col2:
             if st.button('❌ 取消', key=f"cancel_{container_key}"):

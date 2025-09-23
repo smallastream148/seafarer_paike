@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 📚 智能排课系统 (Smart Course Scheduling System)
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
@@ -30,7 +29,7 @@
 ## 📁 项目结构
 
 ```
-排课/
+seafarer_paike/
 ├── auto_schedule/          # 自动排课模块
 │   ├── __init__.py
 │   ├── cli.py             # 命令行接口
@@ -42,7 +41,7 @@
 │
 ├── manual_schedule/        # 手动排课模块
 │   ├── __init__.py
-│   ├── app_manual.py      # Streamlit主应用
+│   ├── app_manual.py      # Streamlit 主应用
 │   ├── manual_core.py     # 核心排课逻辑
 │   ├── manual_soft.py     # 软约束评估
 │   ├── manual_state.py    # 状态管理
@@ -51,7 +50,7 @@
 │       ├── style.css      # 主样式文件
 │       └── style_dark.css # 暗黑模式样式
 │
-├── 排课数据.xlsx          # 输入数据文件
+├── 排课数据.xlsx          # 输入数据文件（示例）
 ├── analyze_courses.py     # 课程分析工具
 ├── verify_dual.py         # 双师验证工具
 └── README.md             # 项目说明文档
@@ -79,7 +78,6 @@ pip install streamlit pandas openpyxl deap numpy
 
 #### 手动排课界面（推荐）
 ```bash
-cd 排课
 streamlit run manual_schedule/app_manual.py
 ```
 
@@ -87,7 +85,6 @@ streamlit run manual_schedule/app_manual.py
 
 #### 自动排课（命令行）
 ```bash
-cd 排课
 python -m auto_schedule.cli
 ```
 
@@ -107,6 +104,19 @@ python -m auto_schedule.cli
 4. 选择课程和教师
 5. 点击保存完成添加
 6. 使用撤销按钮可以撤销上一步操作
+
+### 2.1 手动添加规则（硬/软约束）
+- 适用位置：
+   - 课表单元格中的“添加课程”表单
+   - 顶部“➕ 手动添加课程块（可强制）”面板
+- 保存前检查：
+   - 硬约束（必须满足）：若存在冲突，直接报错并阻止保存。例如：教师冲突、班级该时段不可用、先修未完成、双师教师重复等。
+   - 软约束（优化目标）：计算保存前后软约束分数变化（Δsoft），仅提示不阻止保存：
+      - Δsoft > 0：提示为警告（越大越差）
+      - Δsoft = 0：提示无变化
+      - Δsoft < 0：提示为改善（负值代表更优）
+- 单元格点击规则：仅当该时段“已有课程”时禁止再次添加；即使标记为“不可用”或“课程剩余为 0”也可尝试打开添加表单，是否能保存以硬约束检查为准。
+- 实际提交：通过统一的 add_block 接口落库，支持撤销，保证与硬约束校验一致。
 
 ### 3. 自动排课流程
 1. 点击"🤖 自动排课"展开面板
@@ -191,7 +201,3 @@ A: 点击"🔄 清除缓存"按钮即可重置。
 ---
 
 **Made with ❤️ by Your Team**
-=======
-# seafarer_paike
-用于船员排课的智能系统
->>>>>>> a4199c8ce3f722c52702f5e73c45b373151ec287
