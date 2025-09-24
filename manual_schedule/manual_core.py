@@ -55,7 +55,13 @@ class TimetableData:
         # 若传入了绝对路径且存在，直接使用（避免跨会话串改）
         if excel_file_path and os.path.isabs(excel_file_path) and os.path.exists(excel_file_path):
             self._excel_file_path = excel_file_path
-            auto = _AutoTimetableData(excel_file_path) if _AutoTimetableData else None
+            auto = None
+            if _AutoTimetableData:
+                try:
+                    auto = _AutoTimetableData(excel_file_path)
+                except Exception:
+                    # 若自动数据模型校验失败（例如不可用时间包含未知班级），回退到兼容旧版的解析方式
+                    auto = None
             if auto is None:
                 self._legacy_load(excel_file_path)
                 return
@@ -123,7 +129,12 @@ class TimetableData:
             # Legacy 回退：直接解析 Excel（与早期版本逻辑类似）
             self._legacy_load(excel_file_path)
             return
-        auto = _AutoTimetableData(excel_file_path)
+        # 优先尝试使用自动数据模型；失败则回退到 legacy 解析，避免应用直接崩溃
+        try:
+            auto = _AutoTimetableData(excel_file_path)
+        except Exception:
+            self._legacy_load(excel_file_path)
+            return
         self._auto = auto
         self.courses: Dict[str, CourseInfo] = {}
         for name, c in auto.COURSE_DATA.items():
