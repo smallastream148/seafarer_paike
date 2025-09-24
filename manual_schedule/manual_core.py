@@ -173,54 +173,145 @@ class TimetableData:
         self.classes = {}
         self.teacher_unavailable = {}
         self.class_unavailable = {}
-        dfc = pd.read_excel(excel_file_path, sheet_name='课程数据')
-        has_prereq = 'prereq' in dfc.columns
-        for _, r in dfc.iterrows():
-            name = r['课程名称']
-            blocks = int(r['blocks'])
-            raw_teachers = str(r['available_teachers'])
-            teachers = [t.strip() for t in re.split(r'[，,、;；/\\ ]+', raw_teachers) if t and t.strip()]
-            raw_two = str(r.get('is_two_teacher','')).strip().lower()
-            is_two = raw_two in {'y','yes','true','双','2','two'}
-            prereqs = []
-            if has_prereq:
-                prereqs = [p.strip() for p in str(r.get('prereq','')).split(',') if p.strip()]
-            is_practical = is_two
-            is_theory = (not is_two)
-            self.courses[name] = CourseInfo(name, blocks, teachers, is_two, prereqs, is_practical, is_theory)
-        dfcl = pd.read_excel(excel_file_path, sheet_name='班级数据')
-        for _, r in dfcl.iterrows():
-            cid = str(r['班级ID'])
-            courses = [c.strip() for c in str(r['courses']).split(',') if c.strip()]
-            sd = pd.to_datetime(r['start_date']).date()
-            ed = pd.to_datetime(r['end_date']).date()
-            self.classes[cid] = ClassInfo(cid, courses, sd, ed)
-        # 教师不可用
-        try:
-            dft = pd.read_excel(excel_file_path, sheet_name='教师不可用时间')
-            time_map = {'上午':0,'下午':1}
-            for _, r in dft.iterrows():
-                t = str(r['教师姓名']).strip()
-                date = pd.to_datetime(r['日期']).date()
-                p = time_map.get(str(r['时间段']).strip())
-                if p is None:
-                    continue
-                self.teacher_unavailable.setdefault(t, set()).add((date, p))
-        except Exception:
-            pass
-        # 班级不可用
-        try:
-            dfu = pd.read_excel(excel_file_path, sheet_name='班级不可用时间')
-            time_map = {'上午':0,'下午':1}
-            for _, r in dfu.iterrows():
+
+        # --- 工具: 表名与列名别名支持 ---
+        def pick_sheet(xls: pd.ExcelFile, candidates):
+            names = set(xls.sheet_names)
+            for n in candidates:
+                if n in names:
+                    return n
+            # 简单模糊匹配（去除空格）
+            simplified = {re.sub(r"\s+", "", n): n for n in xls.sheet_names}
+            for cand in candidates:
+                key = re.sub(r"\s+", "", cand)
+                if key in simplified:
+                    return simplified[key]
+            raise ValueError(f"未找到工作表: {candidates}")
+
+        def normalize_columns(df: pd.DataFrame, alias_map: Dict[str, list], required: list[str]):
+            rename = {}
+            cols = list(df.columns)
+            # 统一去掉首尾空白
+            df.columns = [str(c).strip() for c in df.columns]
+            for canon, aliases in alias_map.items():
+                found = None
+                for a in aliases:
+                    if a in df.columns:
+                        found = a
+                        break
+                if found:
+                    if found != canon:
+                        rename[found] = canon
+                else:
+                    if canon in df.columns:
+                        # 已有同名，无需处理
+                        pass
+            if rename:
+                df = df.rename(columns=rename)
+            missing = [c for c in required if c not in df.columns]
+            if missing:
+                raise ValueError(f"缺少必要列: {missing}")
+            return df
+
+        # --- 打开 Excel，一次性选择各表 ---
+        with pd.ExcelFile(excel_file_path) as xls:
+            # 课程数据表
+            course_sheet = pick_sheet(xls, ['课程数据', '课程', '课程信息', '课程表'])
+            dfc = pd.read_excel(xls, sheet_name=course_sheet)
+            dfc = normalize_columns(
+                dfc,
+                alias_map={
+                    '课程名称': ['课程名称', '课程名', '名称', '课程'],
+                    'blocks': ['blocks', '课时数', '总块数', '时长'],
+                    'available_teachers': ['available_teachers', '教师', '可选教师', '授课教师'],
+                    'is_two_teacher': ['is_two_teacher', '双师', '双师课程', '双教师', '是否双师'],
+                    'prereq': ['prereq', '先修课', '前置课程', '先决条件'],
+                },
+                required=['课程名称', 'blocks', 'available_teachers']
+            )
+
+            has_prereq = 'prereq' in dfc.columns
+            for _, r in dfc.iterrows():
+                name = r['课程名称']
+                blocks = int(r['blocks'])
+                raw_teachers = str(r['available_teachers'])
+                teachers = [t.strip() for t in re.split(r'[，,、;；/\\ ]+', raw_teachers) if t and t.strip()]
+                raw_two = str(r.get('is_two_teacher', '')).strip().lower()
+                is_two = raw_two in {'y', 'yes', 'true', '双', '2', 'two', '是', 'true'}
+                prereqs = []
+                if has_prereq:
+                    prereqs = [p.strip() for p in re.split(r'[，,、;；/\\ ]+', str(r.get('prereq', ''))) if p.strip()]
+                is_practical = is_two
+                is_theory = (not is_two)
+                self.courses[name] = CourseInfo(name, blocks, teachers, is_two, prereqs, is_practical, is_theory)
+
+            # 班级数据表
+            class_sheet = pick_sheet(xls, ['班级数据', '班级', '班级信息', '班级表'])
+            dfcl = pd.read_excel(xls, sheet_name=class_sheet)
+            dfcl = normalize_columns(
+                dfcl,
+                alias_map={
+                    '班级ID': ['班级ID', '班级', '班级名称', '班级名', 'class_id'],
+                    'courses': ['courses', '课程列表', '课程', '课程安排'],
+                    'start_date': ['start_date', '开始日期', '开始', '起始日期', 'start'],
+                    'end_date': ['end_date', '结束日期', '结束', '截止日期', 'end'],
+                },
+                required=['班级ID', 'courses', 'start_date', 'end_date']
+            )
+            for _, r in dfcl.iterrows():
                 cid = str(r['班级ID']).strip()
-                date = pd.to_datetime(r['日期']).date()
-                p = time_map.get(str(r['时间段']).strip())
-                if p is None:
-                    continue
-                self.class_unavailable.setdefault(cid, set()).add((date, p))
-        except Exception:
-            pass
+                courses = [c.strip() for c in re.split(r'[，,、;；/\\ ]+', str(r['courses'])) if c.strip()]
+                sd = pd.to_datetime(r['start_date']).date()
+                ed = pd.to_datetime(r['end_date']).date()
+                self.classes[cid] = ClassInfo(cid, courses, sd, ed)
+
+            # 教师不可用
+            try:
+                tea_un_sheet = pick_sheet(xls, ['教师不可用时间', '教师不可用', '教师请假', '教师占用'])
+                dft = pd.read_excel(xls, sheet_name=tea_un_sheet)
+                dft = normalize_columns(
+                    dft,
+                    alias_map={
+                        '教师姓名': ['教师姓名', '教师', '老师', '教师名', 'teacher'],
+                        '日期': ['日期', 'date', 'day'],
+                        '时间段': ['时间段', '时段', '上午/下午', 'period'],
+                    },
+                    required=['教师姓名', '日期', '时间段']
+                )
+                time_map = {'上午': 0, '下午': 1, 'am': 0, 'pm': 1}
+                for _, r in dft.iterrows():
+                    t = str(r['教师姓名']).strip()
+                    date = pd.to_datetime(r['日期']).date()
+                    p = time_map.get(str(r['时间段']).strip().lower())
+                    if p is None:
+                        continue
+                    self.teacher_unavailable.setdefault(t, set()).add((date, p))
+            except Exception:
+                pass
+
+            # 班级不可用
+            try:
+                cls_un_sheet = pick_sheet(xls, ['班级不可用时间', '班级不可用', '班级占用'])
+                dfu = pd.read_excel(xls, sheet_name=cls_un_sheet)
+                dfu = normalize_columns(
+                    dfu,
+                    alias_map={
+                        '班级ID': ['班级ID', '班级', '班级名称', '班级名', 'class_id'],
+                        '日期': ['日期', 'date', 'day'],
+                        '时间段': ['时间段', '时段', '上午/下午', 'period'],
+                    },
+                    required=['班级ID', '日期', '时间段']
+                )
+                time_map = {'上午': 0, '下午': 1, 'am': 0, 'pm': 1}
+                for _, r in dfu.iterrows():
+                    cid = str(r['班级ID']).strip()
+                    date = pd.to_datetime(r['日期']).date()
+                    p = time_map.get(str(r['时间段']).strip().lower())
+                    if p is None:
+                        continue
+                    self.class_unavailable.setdefault(cid, set()).add((date, p))
+            except Exception:
+                pass
 
     def iter_class_slots(self, class_id: str):
         info = self.classes[class_id]
